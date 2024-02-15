@@ -1901,6 +1901,49 @@ test.serial('transaction', async (t) => {
 	await db.execute(sql`drop table ${products}`);
 });
 
+test.serial('transaction automatically rollsback when an error is thrown', async (t) => {
+	const { db } = t.context;
+
+	const users = pgTable('users_transactions', {
+		id: serial('id').primaryKey(),
+		balance: integer('balance').notNull(),
+	});
+	const products = pgTable('products_transactions', {
+		id: serial('id').primaryKey(),
+		price: integer('price').notNull(),
+		stock: integer('stock').notNull(),
+	});
+
+	await db.execute(sql`drop table if exists ${users}`);
+	await db.execute(sql`drop table if exists ${products}`);
+
+	await db.execute(sql`create table users_transactions (id serial not null primary key, balance integer not null)`);
+	await db.execute(
+		sql`create table products_transactions (id serial not null primary key, price integer not null, stock integer not null)`,
+	);
+
+	const user = await db.insert(users).values({ balance: 100 }).returning().then((rows) => rows[0]!);
+	const product = await db.insert(products).values({ price: 10, stock: 10 }).returning().then((rows) => rows[0]!);
+
+  await t.throwsAsync(async () =>
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ balance: user.balance - product.price }).where(eq(users.id, user.id));
+      await tx.update(products).set({ stock: product.stock - 1 }).where(eq(products.id, product.id));
+      throw new Error("Rollback");
+    }), { instanceOf: Error });
+
+	const result = await db.select().from(users);
+
+	t.deepEqual(result, [{ balance: 100, id: 1 }]);
+
+  const productResult = await db.select().from(products);
+
+	t.deepEqual(productResult, [{ id:1, price: 10, stock: 10 }]);
+
+	await db.execute(sql`drop table ${users}`);
+	await db.execute(sql`drop table ${products}`);
+});
+
 test.serial('transaction rollback', async (t) => {
 	const { db } = t.context;
 
